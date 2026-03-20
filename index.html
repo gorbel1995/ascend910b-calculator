@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>昇腾910B × GLM-5 并发容量计算器</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 16px; padding: 36px; width: 100%; max-width: 680px; }
+    h1 { font-size: 1.4rem; font-weight: 700; color: #a78bfa; margin-bottom: 4px; }
+    .subtitle { font-size: 0.85rem; color: #64748b; margin-bottom: 32px; }
+    .section-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 14px; }
+    .params-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 28px; }
+    .param-item label { display: block; font-size: 0.78rem; color: #94a3b8; margin-bottom: 6px; }
+    .param-item input, .param-item select { width: 100%; background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; padding: 9px 12px; color: #e2e8f0; font-size: 0.9rem; outline: none; }
+    .param-item input:focus, .param-item select:focus { border-color: #7c3aed; }
+    .param-item select option { background: #1a1d27; }
+    .concurrency-row { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 28px; }
+    .concurrency-row .param-item { flex: 1; }
+    .btn-calc { background: #7c3aed; color: #fff; border: none; border-radius: 8px; padding: 10px 24px; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+    .btn-calc:hover { background: #6d28d9; }
+    .result-box { background: #0f1117; border: 1px solid #2d3148; border-radius: 12px; padding: 24px; display: none; }
+    .result-box.show { display: block; }
+    .result-main { display: flex; align-items: baseline; gap: 10px; margin-bottom: 20px; }
+    .result-num { font-size: 3rem; font-weight: 800; color: #a78bfa; line-height: 1; }
+    .result-unit { font-size: 1rem; color: #94a3b8; }
+    .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+    .stat-item { background: #1a1d27; border-radius: 8px; padding: 12px; text-align: center; }
+    .stat-value { font-size: 1.1rem; font-weight: 700; color: #e2e8f0; }
+    .stat-label { font-size: 0.72rem; color: #64748b; margin-top: 3px; }
+    .note { font-size: 0.78rem; color: #64748b; line-height: 1.6; border-top: 1px solid #2d3148; padding-top: 14px; }
+    .note span { color: #f59e0b; }
+    .divider { border: none; border-top: 1px solid #2d3148; margin: 24px 0; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>昇腾 910B x GLM-5 并发计算器</h1>
+  <p class="subtitle">本地部署所需设备数量估算工具</p>
+  <p class="section-title">硬件 & 模型参数</p>
+  <div class="params-grid">
+    <div class="param-item"><label>单卡显存 (GB)</label><input type="number" id="vramPerCard" value="64" min="1" /></div>
+    <div class="param-item"><label>每台设备卡数</label><input type="number" id="cardsPerDevice" value="8" min="1" /></div>
+    <div class="param-item"><label>量化精度</label><select id="quantType" onchange="onQuantChange()"><option value="int4">INT4（推荐）</option><option value="int8">INT8</option><option value="fp16">FP16（半精度）</option><option value="custom">自定义</option></select></div>
+    <div class="param-item"><label>模型显存需求 (GB)</label><input type="number" id="modelVram" value="185" min="1" /></div>
+    <div class="param-item"><label>每路并发 KV Cache (GB)</label><input type="number" id="kvPerReq" value="2" min="0.1" step="0.1" /></div>
+    <div class="param-item"><label>显存利用率上限 (%)</label><input type="number" id="utilRate" value="85" min="50" max="100" /></div>
+  </div>
+  <hr class="divider" />
+  <p class="section-title">目标并发数</p>
+  <div class="concurrency-row">
+    <div class="param-item"><label>同时处理的请求数量</label><input type="number" id="concurrency" value="100" min="1" /></div>
+    <button class="btn-calc" onclick="calculate()">计算</button>
+  </div>
+  <div class="result-box" id="resultBox">
+    <p class="section-title">计算结果</p>
+    <div class="result-main"><div class="result-num" id="resDevices">-</div><div class="result-unit">台 昇腾910B 8卡设备</div></div>
+    <div class="stats-grid">
+      <div class="stat-item"><div class="stat-value" id="resTotalCards">-</div><div class="stat-label">总卡数</div></div>
+      <div class="stat-item"><div class="stat-value" id="resTotalVram">-</div><div class="stat-label">总显存 (GB)</div></div>
+      <div class="stat-item"><div class="stat-value" id="resVramUsed">-</div><div class="stat-label">显存使用率</div></div>
+    </div>
+    <div class="note" id="resNote"></div>
+  </div>
+</div>
+<script>
+  const QUANT_PRESETS = { int4:{model:185,kv:2.0}, int8:{model:370,kv:3.0}, fp16:{model:744,kv:4.0}, custom:null };
+  function onQuantChange() {
+    const p = QUANT_PRESETS[document.getElementById('quantType').value];
+    if (p) { document.getElementById('modelVram').value=p.model; document.getElementById('kvPerReq').value=p.kv; }
+  }
+  function calculate() {
+    const vramPerCard=parseFloat(document.getElementById('vramPerCard').value);
+    const cardsPerDev=parseInt(document.getElementById('cardsPerDevice').value);
+    const modelVram=parseFloat(document.getElementById('modelVram').value);
+    const kvPerReq=parseFloat(document.getElementById('kvPerReq').value);
+    const utilRate=parseFloat(document.getElementById('utilRate').value)/100;
+    const concurrency=parseInt(document.getElementById('concurrency').value);
+    if(!concurrency||concurrency<1) return;
+    const vramPerDevice=vramPerCard*cardsPerDev*utilRate;
+    const totalVramNeeded=modelVram+kvPerReq*concurrency;
+    const devices=Math.ceil(totalVramNeeded/vramPerDevice);
+    const totalCards=devices*cardsPerDev;
+    const totalVram=devices*vramPerCard*cardsPerDev;
+    const usedPct=((totalVramNeeded/totalVram)*100).toFixed(1);
+    document.getElementById('resDevices').textContent=devices;
+    document.getElementById('resTotalCards').textContent=totalCards;
+    document.getElementById('resTotalVram').textContent=totalVram;
+    document.getElementById('resVramUsed').textContent=usedPct+'%';
+    const ql=document.getElementById('quantType').options[document.getElementById('quantType').selectedIndex].text;
+    document.getElementById('resNote').innerHTML='计算公式：<span>所需显存 = 模型权重('+modelVram+'GB) + 并发数('+concurrency+') x 单路KV Cache('+kvPerReq+'GB) = '+totalVramNeeded.toFixed(1)+'GB</span><br/>单台设备可用显存 = '+vramPerCard+'GB x '+cardsPerDev+'卡 x '+(utilRate*100).toFixed(0)+'% = '+vramPerDevice.toFixed(1)+'GB<br/>量化方式：'+ql+'。以上为估算值，建议预留 10~20% 余量。';
+    document.getElementById('resultBox').classList.add('show');
+  }
+  document.getElementById('concurrency').addEventListener('keydown',e=>{ if(e.key==='Enter') calculate(); });
+</script>
+</body>
+</html>
