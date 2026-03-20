@@ -65,7 +65,9 @@
   </div>
 </div>
 <script>
-  const QUANT_PRESETS = { int4:{model:185,kv:2.0}, int8:{model:370,kv:3.0}, fp16:{model:744,kv:4.0}, custom:null };
+  // GLM-5 744B MoE：所有专家权重都需加载进显存
+  // INT4: 744B × 0.5bytes ≈ 372GB；INT8: 744B × 1byte ≈ 744GB；FP16: 744B × 2bytes ≈ 1488GB
+  const QUANT_PRESETS = { int4:{model:372,kv:2.0}, int8:{model:744,kv:3.0}, fp16:{model:1488,kv:4.0}, custom:null };
   function onQuantChange() {
     const p = QUANT_PRESETS[document.getElementById('quantType').value];
     if (p) { document.getElementById('modelVram').value=p.model; document.getElementById('kvPerReq').value=p.kv; }
